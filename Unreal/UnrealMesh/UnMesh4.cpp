@@ -2446,8 +2446,11 @@ struct FStaticMeshLODModel4
 			}
 		}
 		// FStaticMeshBuffersSize
-		uint32 SerializedBuffersSize, DepthOnlyIBSize, ReversedIBsSize;
-		Ar << SerializedBuffersSize << DepthOnlyIBSize << ReversedIBsSize;
+		if (!bIsLODCookedOut)
+		{
+			uint32 SerializedBuffersSize, DepthOnlyIBSize, ReversedIBsSize;
+			Ar << SerializedBuffersSize << DepthOnlyIBSize << ReversedIBsSize;
+		}
 
 		unguard;
 	}
@@ -2972,7 +2975,7 @@ void UStaticMesh4::ConvertMesh()
 		int NumTexCoords = SrcLod.VertexBuffer.NumTexCoords;
 		int NumVerts     = SrcLod.PositionVertexBuffer.Verts.Num();
 
-		if (NumVerts == 0 && NumTexCoords == 0 && lodIndex < Lods.Num()-1)
+		if (NumVerts == 0 && NumTexCoords == 0 && lodIndex < Lods.Num())
 		{
 			// UE4.20+, see CDSF_MinLodData
 			appPrintf("Lod #%d is stripped, skipping ...\n", lodIndex);
