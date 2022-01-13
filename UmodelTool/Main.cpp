@@ -270,6 +270,9 @@ static void CallExportStaticMesh(const CStaticMesh* Mesh)
 	case EExportMeshFormat::gltf:
 		ExportStaticMeshGLTF(Mesh);
 		break;
+	case EExportMeshFormat::xay:
+		ExportStaticMeshXAY(Mesh);
+		break;
 	}
 }
 
@@ -873,6 +876,11 @@ int main(int argc, const char **argv)
 		else if (!stricmp(opt, "gltf"))
 		{
 			GSettings.Export.SkeletalMeshFormat = GSettings.Export.StaticMeshFormat = EExportMeshFormat::gltf;
+		}
+		else if (!stricmp(opt, "xay"))
+		{
+			GSettings.Export.SkeletalMeshFormat = EExportMeshFormat::gltf;
+			GSettings.Export.StaticMeshFormat = EExportMeshFormat::xay;
 		}
 		else if (!stricmp(opt, "all") && mainCmd == CMD_Dump)
 		{
