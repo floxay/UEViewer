@@ -1027,6 +1027,16 @@ void ExportSkeletalMeshGLTF(const CSkeletalMesh* Mesh)
 		}
 	}
 
+	if (OriginalMesh->GetTypeinfo()->NumProps)
+	{
+		FArchive* PropAr = CreateExportArchive(OriginalMesh, EFileArchiveOptions::TextFile, "%s.props.txt", OriginalMesh->Name);
+		if (PropAr)
+		{
+			OriginalMesh->GetTypeinfo()->SaveProps(OriginalMesh, *PropAr);
+			delete PropAr;
+		}
+	}
+
 	unguard;
 }
 
@@ -1066,6 +1076,16 @@ void ExportStaticMeshGLTF(const CStaticMesh* Mesh)
 			ExportMeshLod(Context, Mesh->Lods[Lod], Mesh->Lods[Lod].Verts, *Ar, *Ar2);
 			delete Ar;
 			delete Ar2;
+		}
+	}
+
+	if (OriginalMesh->GetTypeinfo()->NumProps)
+	{
+		FArchive* PropAr = CreateExportArchive(OriginalMesh, EFileArchiveOptions::TextFile, "%s.props.txt", OriginalMesh->Name);
+		if (PropAr)
+		{
+			OriginalMesh->GetTypeinfo()->SaveProps(OriginalMesh, *PropAr);
+			delete PropAr;
 		}
 	}
 
