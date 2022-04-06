@@ -1,0 +1,37 @@
+# perl highlighting
+
+ACL_LIB=
+ACL_LIB_FILE=
+ACL_LIB_PATH=
+
+!if "$COMPILER" eq "VisualC"
+	!if "$PLATFORM" eq "win32"
+		ACL_LIB_PATH=x86
+		ACL_LIB_FILE=ACL.lib
+	!else
+		ACL_LIB_PATH=x64
+		ACL_LIB_FILE=ACL.lib
+	!endif
+!endif
+
+!if "$ACL_LIB_FILE" ne ""
+	# Append the library path
+	ACL_LIB=$R/libs/acl/$ACL_LIB_PATH/$ACL_LIB_FILE
+	# Verify if acl exists here
+	!if ! -e "$ACL_LIB"
+		!message $ACL_LIB doesn't exist
+		ACL_LIB=
+	!endif
+!else
+	!message Info: the selected platform doesn't have ACL SDK support.
+!endif
+
+!if "$ACL_LIB" ne ""
+	LIBINCLUDES += $R/libs/acl/include
+	LIBINCLUDES += $R/libs/acl/include/acl
+	LIBRARIES += $R/libs/acl/$ACL_LIB_PATH
+	STDLIBS += $ACL_LIB_FILE
+	!if "$COMPILER" eq "VisualC"
+		LIBC = static
+	!endif
+!endif

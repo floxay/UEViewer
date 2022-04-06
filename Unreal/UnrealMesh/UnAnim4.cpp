@@ -11,6 +11,8 @@
 #include "Mesh/SkeletalMesh.h"
 #include "TypeConvert.h"
 
+#include "libs/acl/include/acl.h"
+
 //#define DEBUG_DECOMPRESS	1
 //#define DEBUG_SKELMESH	1
 //#define DEBUG_ANIM		1
@@ -294,7 +296,7 @@ void USkeleton::Serialize(FArchive &Ar)
 			guard(AdjustScalesForRetargetSource);
 			if (!AdjustBoneScales(ReferenceSkeleton, Pose.ReferencePose))
 			{
-				appPrintf("WARNING: AnimRetargetSources[%s] has wrong bone count %d (should be %d)",
+				appPrintf("WARNING: AnimRetargetSources[%s] has wrong bone count %d (should be %d)\n",
 					*It.Key, Pose.ReferencePose.Num(), ReferenceSkeleton.RefBoneInfo.Num());
 			}
 			unguardf("%s", *It.Key);
@@ -800,13 +802,13 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 		offsetsPerBone = 2;
 
 	// Check for valid data to avoid crash if it's something wrong there
-	if (Seq->CompressedTrackOffsets.Num() != NumTracks * offsetsPerBone && !Seq->RawAnimationData.Num())
+	/*if (Seq->CompressedTrackOffsets.Num() != NumTracks * offsetsPerBone && !Seq->RawAnimationData.Num())
 	{
 		appNotify("AnimSequence %s has wrong CompressedTrackOffsets size (has %d, expected %d), removing track",
 			Seq->Name, Seq->CompressedTrackOffsets.Num(), NumTracks * offsetsPerBone);
 		OriginalAnims.RemoveSingle(Seq); // temporary ACL crash fix
 		return;
-	}
+	}*/
 
 	// Store UAnimSequence in 'OriginalAnims' array, we just need it from time to time
 	OriginalAnims.Add(Seq);
@@ -884,212 +886,281 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 	// use of RefPose. In this case there's no point adding the animation to AnimSet. We'll
 	// create FMemReader even for empty CompressedByteStream, otherwise it would be hard to
 	// create a valid CAnimSequence which won't crash animation export.
-	FMemReader Reader(
-		Seq->CompressedByteStream.Num() ? Seq->CompressedByteStream.GetData() : (const uint8*)"",
-		Seq->CompressedByteStream.Num());
-	Reader.SetupFrom(*Package);
-
-	bool HasTimeTracks = (Seq->KeyEncodingFormat == AKF_VariableKeyLerp);
-
-	for (int BoneIndex = 0; BoneIndex < ReferenceSkeleton.RefBoneInfo.Num(); BoneIndex++)
+	if (Seq->BoneCodecDDCHandle.EndsWith("ACL_0"))
 	{
-		CAnimTrack *A = new CAnimTrack;
-		Dst->Tracks.Add(A);
+		byte* allocptr = (byte*)nAllocate(Seq->SerializedByteStream.Num(), 16);
+		memcpy(allocptr, Seq->SerializedByteStream.GetData(), Seq->SerializedByteStream.Num() * sizeof(uint8));
 
-		int TrackIndex = Seq->FindTrackForBoneIndex(BoneIndex);
-
-		if (TrackIndex < 0)
+		struct RawBufferHeader
 		{
-			// This bone is not animated with this UAnimSequence (but it may be animated with other
-			// ones which shares the same USkeleton). Just use an empty track, it should be properly
-			// handled by our animation system.
-			continue;
-		}
+			uint32 Size;
+			uint32 Hash;
+		};
 
-		if (!Seq->CompressedTrackOffsets.Num())	//?? or if RawAnimData.Num() != 0
+		struct TracksHeader
 		{
-			// using RawAnimData array
-			assert(Seq->RawAnimationData.Num() == NumTracks);
-			CopyArray(A->KeyPos,  CVT(Seq->RawAnimationData[TrackIndex].PosKeys));
-			CopyArray(A->KeyQuat, CVT(Seq->RawAnimationData[TrackIndex].RotKeys));
-			CopyArray(A->KeyTime, Seq->RawAnimationData[TrackIndex].KeyTimes);	// may be empty
-			for (int k = 0; k < A->KeyTime.Num(); k++)
-				A->KeyTime[k] *= Dst->Rate;
-			continue;
-		}
+			uint32 Tag;
+			uint16 Version;
+			byte AlgorithmType;
+			byte TrackType;
+			uint32 NumTracks;
+			uint32 NumSamples;
+			float SampleRate;
+			uint32 MiscPacked;
 
-		static const CVec3 nullVec  = { 0, 0, 0 };
-		static const CQuat nullQuat = { 0, 0, 0, 1 };
+			bool GetHasScale() { return (MiscPacked & 1) != 0; }
+		};
 
-		int offsetIndex = TrackIndex * offsetsPerBone;
+		TracksHeader header = *(TracksHeader*)(allocptr + sizeof(RawBufferHeader));
 
-		//----------------------------------------------
-		// decode AKF_PerTrackCompression data
-		//----------------------------------------------
-		if (Seq->KeyEncodingFormat == AKF_PerTrackCompression)
-		{
-			// this format uses different key storage
-			guard(PerTrackCompression);
-			assert(Seq->TranslationCompressionFormat == ACF_Identity);
-			assert(Seq->RotationCompressionFormat == ACF_Identity);
+		int NumKeys = header.NumSamples * header.NumTracks;
 
-			int TransOffset = Seq->CompressedTrackOffsets[offsetIndex  ];
-			int RotOffset   = Seq->CompressedTrackOffsets[offsetIndex+1];
-			int ScaleOffset = Seq->CompressedScaleOffsets.IsValid() ? Seq->CompressedScaleOffsets.OffsetData[TrackIndex] : -1;
-#if 0
-			const int BytesToDump = 64;
-			if (TransOffset >= 0) { Reader.Seek(TransOffset); DUMP_ARC_BYTES(Reader, BytesToDump, "Trans"); }
-			if (RotOffset >= 0) { Reader.Seek(RotOffset); DUMP_ARC_BYTES(Reader, BytesToDump,  "Rot"); }
-			if (ScaleOffset >= 0) { Reader.Seek(ScaleOffset); DUMP_ARC_BYTES(Reader, BytesToDump, "Scale"); }
+		TArray<FVector> PosKeys;
+		PosKeys.AddUninitialized(NumKeys);
+		TArray<FQuat> RotKeys;
+		RotKeys.AddUninitialized(NumKeys);
+
+		TArray<FVector> ScaleKeys;
+		ScaleKeys.AddUninitialized(NumKeys);
+
+		nReadACLData(allocptr, PosKeys.GetData(), RotKeys.GetData(), ScaleKeys.GetData());
+
+#if !SUPPORT_SCALE_KEYS
+		ScaleKeys.Empty();
 #endif
 
-			guard(TransKeys);
-			// read translation keys
-			if (TransOffset == -1)
-			{
-				A->KeyPos.Add(nullVec);
-				DBG("    [%d] no translation data\n", TrackIndex);
-			}
-			else
-			{
-				Reader.Seek(TransOffset);
-				ReadPerTrackVectorData(Reader, TrackIndex, "translation", A->KeyPos, A->KeyPosTime, Seq->NumFrames);
-			}
-			unguard;
+		for (int BoneIndex = 0; BoneIndex < ReferenceSkeleton.RefBoneInfo.Num(); BoneIndex++)
+		{
+			CAnimTrack* A = new CAnimTrack;
+			Dst->Tracks.Add(A);
 
-			guard(RotKeys);
-			// read rotation keys
-			if (RotOffset == -1)
+			int TrackIndex = Seq->FindTrackForBoneIndex(BoneIndex);
+
+			if (TrackIndex < 0)
 			{
-				A->KeyQuat.Add(nullQuat);
-				DBG("    [%d] no rotation data\n", TrackIndex);
+				// This bone is not animated with this UAnimSequence (but it may be animated with other
+				// ones which shares the same USkeleton). Just use an empty track, it should be properly
+				// handled by our animation system.
+				continue;
 			}
-			else
+			int Offset = TrackIndex * header.NumSamples;
+
+			CopyArray(A->KeyPos, CVT(PosKeys), (int32)header.NumSamples, Offset);
+			CopyArray(A->KeyQuat, CVT(RotKeys), (int32)header.NumSamples, Offset);
+#if SUPPORT_SCALE_KEYS
+			CopyArray(A->KeyScale, CVT(ScaleKeys), (int32)header.NumSamples, Offset);
+#endif // SUPPORT_SCALE_KEYS
+		}
+		nDeallocate(allocptr, Seq->SerializedByteStream.Num());
+	}
+	else
+	{
+		FMemReader Reader(
+			Seq->CompressedByteStream.Num() ? Seq->CompressedByteStream.GetData() : (const uint8*)"",
+			Seq->CompressedByteStream.Num());
+		Reader.SetupFrom(*Package);
+
+		bool HasTimeTracks = (Seq->KeyEncodingFormat == AKF_VariableKeyLerp);
+
+		for (int BoneIndex = 0; BoneIndex < ReferenceSkeleton.RefBoneInfo.Num(); BoneIndex++)
+		{
+			CAnimTrack *A = new CAnimTrack;
+			Dst->Tracks.Add(A);
+
+			int TrackIndex = Seq->FindTrackForBoneIndex(BoneIndex);
+
+			if (TrackIndex < 0)
 			{
-				Reader.Seek(RotOffset);
-				ReadPerTrackQuatData(Reader, TrackIndex, "rotation", A->KeyQuat, A->KeyQuatTime, Seq->NumFrames);
+				// This bone is not animated with this UAnimSequence (but it may be animated with other
+				// ones which shares the same USkeleton). Just use an empty track, it should be properly
+				// handled by our animation system.
+				continue;
 			}
-			unguard;
+
+			if (!Seq->CompressedTrackOffsets.Num())	//?? or if RawAnimData.Num() != 0
+			{
+				// using RawAnimData array
+				assert(Seq->RawAnimationData.Num() == NumTracks);
+				CopyArray(A->KeyPos,  CVT(Seq->RawAnimationData[TrackIndex].PosKeys));
+				CopyArray(A->KeyQuat, CVT(Seq->RawAnimationData[TrackIndex].RotKeys));
+				CopyArray(A->KeyTime, Seq->RawAnimationData[TrackIndex].KeyTimes);	// may be empty
+				for (int k = 0; k < A->KeyTime.Num(); k++)
+					A->KeyTime[k] *= Dst->Rate;
+				continue;
+			}
+
+			static const CVec3 nullVec  = { 0, 0, 0 };
+			static const CQuat nullQuat = { 0, 0, 0, 1 };
+
+			int offsetIndex = TrackIndex * offsetsPerBone;
+
+			//----------------------------------------------
+			// decode AKF_PerTrackCompression data
+			//----------------------------------------------
+			if (Seq->KeyEncodingFormat == AKF_PerTrackCompression)
+			{
+				// this format uses different key storage
+				guard(PerTrackCompression);
+				assert(Seq->TranslationCompressionFormat == ACF_Identity);
+				assert(Seq->RotationCompressionFormat == ACF_Identity);
+
+				int TransOffset = Seq->CompressedTrackOffsets[offsetIndex  ];
+				int RotOffset   = Seq->CompressedTrackOffsets[offsetIndex+1];
+				int ScaleOffset = Seq->CompressedScaleOffsets.IsValid() ? Seq->CompressedScaleOffsets.OffsetData[TrackIndex] : -1;
+#if 0
+				const int BytesToDump = 64;
+				if (TransOffset >= 0) { Reader.Seek(TransOffset); DUMP_ARC_BYTES(Reader, BytesToDump, "Trans"); }
+				if (RotOffset >= 0) { Reader.Seek(RotOffset); DUMP_ARC_BYTES(Reader, BytesToDump,  "Rot"); }
+				if (ScaleOffset >= 0) { Reader.Seek(ScaleOffset); DUMP_ARC_BYTES(Reader, BytesToDump, "Scale"); }
+#endif
+
+				guard(TransKeys);
+				// read translation keys
+				if (TransOffset == -1)
+				{
+					A->KeyPos.Add(nullVec);
+					DBG("    [%d] no translation data\n", TrackIndex);
+				}
+				else
+				{
+					Reader.Seek(TransOffset);
+					ReadPerTrackVectorData(Reader, TrackIndex, "translation", A->KeyPos, A->KeyPosTime, Seq->NumFrames);
+				}
+				unguard;
+
+				guard(RotKeys);
+				// read rotation keys
+				if (RotOffset == -1)
+				{
+					A->KeyQuat.Add(nullQuat);
+					DBG("    [%d] no rotation data\n", TrackIndex);
+				}
+				else
+				{
+					Reader.Seek(RotOffset);
+					ReadPerTrackQuatData(Reader, TrackIndex, "rotation", A->KeyQuat, A->KeyQuatTime, Seq->NumFrames);
+				}
+				unguard;
 
 #if SUPPORT_SCALE_KEYS
-			guard(ScaleKeys);
-			// read scale keys
-			if (ScaleOffset == -1)
+				guard(ScaleKeys);
+				// read scale keys
+				if (ScaleOffset == -1)
+				{
+					DBG("    [%d] no scale data\n", TrackIndex);
+				}
+				else
+				{
+					Reader.Seek(ScaleOffset);
+					ReadPerTrackVectorData(Reader, TrackIndex, "scale", A->KeyScale, A->KeyScaleTime, Seq->NumFrames);
+				}
+				unguard;
+#endif // SUPPORT_SCALE_KEYS
+
+				unguard;
+
+				continue;
+				// end of AKF_PerTrackCompression block ...
+			}
+
+			//----------------------------------------------
+			// end of AKF_PerTrackCompression decoder
+			//----------------------------------------------
+
+			// read animations
+			int TransOffset = Seq->CompressedTrackOffsets[offsetIndex  ];
+			int TransKeys   = Seq->CompressedTrackOffsets[offsetIndex+1];
+			int RotOffset   = Seq->CompressedTrackOffsets[offsetIndex+2];
+			int RotKeys     = Seq->CompressedTrackOffsets[offsetIndex+3];
+			//		appPrintf("[%d:%d:%d] :  %d[%d]  %d[%d]  %d[%d]\n", j, Seq->RotationCompressionFormat, Seq->TranslationCompressionFormat, TransOffset, TransKeys, RotOffset, RotKeys, ScaleOffset, ScaleKeys);
+
+			A->KeyPos.Empty(TransKeys);
+			A->KeyQuat.Empty(RotKeys);
+
+			FVector Mins, Ranges;
+
+			// read translation keys
+			if (TransKeys)
 			{
-				DBG("    [%d] no scale data\n", TrackIndex);
+				Reader.Seek(TransOffset);
+				AnimationCompressionFormat TranslationCompressionFormat = Seq->TranslationCompressionFormat;
+				if (TransKeys == 1)
+					TranslationCompressionFormat = ACF_None;	// single key is stored without compression
+				// read mins/ranges
+				if (TranslationCompressionFormat == ACF_IntervalFixed32NoW)
+				{
+					Reader << Mins << Ranges;
+				}
+
+				for (int k = 0; k < TransKeys; k++)
+				{
+					switch (TranslationCompressionFormat)
+					{
+						TP (ACF_None,               FVector)
+						TP (ACF_Float96NoW,         FVector)
+						TPR(ACF_IntervalFixed32NoW, FVectorIntervalFixed32, A->KeyPos)
+						TP (ACF_Fixed48NoW,         FVectorFixed48)
+					case ACF_Identity:
+						A->KeyPos.Add(nullVec);
+						break;
+					default:
+						appError("Unknown translation compression method: %d (%s)", TranslationCompressionFormat, EnumToName(TranslationCompressionFormat));
+					}
+				}
+
+				// align to 4 bytes
+				Reader.Seek(Align(Reader.Tell(), 4));
+				if (HasTimeTracks)
+					ReadTimeArray(Reader, TransKeys, A->KeyPosTime, Seq->NumFrames);
 			}
 			else
 			{
-				Reader.Seek(ScaleOffset);
-				ReadPerTrackVectorData(Reader, TrackIndex, "scale", A->KeyScale, A->KeyScaleTime, Seq->NumFrames);
+//				A->KeyPos.Add(nullVec);
+//				appNotify("No translation keys!");
 			}
-			unguard;
-#endif // SUPPORT_SCALE_KEYS
 
-			unguard;
+	#if DEBUG_DECOMPRESS
+			int TransEnd = Reader.Tell();
+	#endif
+			// read rotation keys
+			Reader.Seek(RotOffset);
+			AnimationCompressionFormat RotationCompressionFormat = Seq->RotationCompressionFormat;
 
-			continue;
-			// end of AKF_PerTrackCompression block ...
-		}
-
-		//----------------------------------------------
-		// end of AKF_PerTrackCompression decoder
-		//----------------------------------------------
-
-		// read animations
-		int TransOffset = Seq->CompressedTrackOffsets[offsetIndex  ];
-		int TransKeys   = Seq->CompressedTrackOffsets[offsetIndex+1];
-		int RotOffset   = Seq->CompressedTrackOffsets[offsetIndex+2];
-		int RotKeys     = Seq->CompressedTrackOffsets[offsetIndex+3];
-//		appPrintf("[%d:%d:%d] :  %d[%d]  %d[%d]  %d[%d]\n", j, Seq->RotationCompressionFormat, Seq->TranslationCompressionFormat, TransOffset, TransKeys, RotOffset, RotKeys, ScaleOffset, ScaleKeys);
-
-		A->KeyPos.Empty(TransKeys);
-		A->KeyQuat.Empty(RotKeys);
-
-		FVector Mins, Ranges;
-
-		// read translation keys
-		if (TransKeys)
-		{
-			Reader.Seek(TransOffset);
-			AnimationCompressionFormat TranslationCompressionFormat = Seq->TranslationCompressionFormat;
-			if (TransKeys == 1)
-				TranslationCompressionFormat = ACF_None;	// single key is stored without compression
-			// read mins/ranges
-			if (TranslationCompressionFormat == ACF_IntervalFixed32NoW)
+			if (RotKeys == 1)
 			{
+				RotationCompressionFormat = ACF_Float96NoW;	// single key is stored without compression
+			}
+			else if (RotKeys > 1 && RotationCompressionFormat == ACF_IntervalFixed32NoW)
+			{
+				// Mins/Ranges are read only when needed - i.e. for ACF_IntervalFixed32NoW
 				Reader << Mins << Ranges;
 			}
 
-			for (int k = 0; k < TransKeys; k++)
+			for (int k = 0; k < RotKeys; k++)
 			{
-				switch (TranslationCompressionFormat)
+				switch (RotationCompressionFormat)
 				{
-				TP (ACF_None,               FVector)
-				TP (ACF_Float96NoW,         FVector)
-				TPR(ACF_IntervalFixed32NoW, FVectorIntervalFixed32, A->KeyPos)
-				TP (ACF_Fixed48NoW,         FVectorFixed48)
+					TR (ACF_None, FQuat, A->KeyQuat)
+					TR (ACF_Float96NoW, FQuatFloat96NoW, A->KeyQuat)
+					TR (ACF_Fixed48NoW, FQuatFixed48NoW, A->KeyQuat)
+					TR (ACF_Fixed32NoW, FQuatFixed32NoW, A->KeyQuat)
+					TRR(ACF_IntervalFixed32NoW, FQuatIntervalFixed32NoW, A->KeyQuat)
+					TR (ACF_Float32NoW, FQuatFloat32NoW, A->KeyQuat)
 				case ACF_Identity:
-					A->KeyPos.Add(nullVec);
+					A->KeyQuat.Add(nullQuat);
 					break;
 				default:
-					appError("Unknown translation compression method: %d (%s)", TranslationCompressionFormat, EnumToName(TranslationCompressionFormat));
+					appError("Unknown rotation compression method: %d (%s)", RotationCompressionFormat, EnumToName(RotationCompressionFormat));
 				}
 			}
 
-			// align to 4 bytes
-			Reader.Seek(Align(Reader.Tell(), 4));
 			if (HasTimeTracks)
-				ReadTimeArray(Reader, TransKeys, A->KeyPosTime, Seq->NumFrames);
-		}
-		else
-		{
-//			A->KeyPos.Add(nullVec);
-//			appNotify("No translation keys!");
-		}
-
-#if DEBUG_DECOMPRESS
-		int TransEnd = Reader.Tell();
-#endif
-		// read rotation keys
-		Reader.Seek(RotOffset);
-		AnimationCompressionFormat RotationCompressionFormat = Seq->RotationCompressionFormat;
-
-		if (RotKeys == 1)
-		{
-			RotationCompressionFormat = ACF_Float96NoW;	// single key is stored without compression
-		}
-		else if (RotKeys > 1 && RotationCompressionFormat == ACF_IntervalFixed32NoW)
-		{
-			// Mins/Ranges are read only when needed - i.e. for ACF_IntervalFixed32NoW
-			Reader << Mins << Ranges;
-		}
-
-		for (int k = 0; k < RotKeys; k++)
-		{
-			switch (RotationCompressionFormat)
 			{
-			TR (ACF_None, FQuat, A->KeyQuat)
-			TR (ACF_Float96NoW, FQuatFloat96NoW, A->KeyQuat)
-			TR (ACF_Fixed48NoW, FQuatFixed48NoW, A->KeyQuat)
-			TR (ACF_Fixed32NoW, FQuatFixed32NoW, A->KeyQuat)
-			TRR(ACF_IntervalFixed32NoW, FQuatIntervalFixed32NoW, A->KeyQuat)
-			TR (ACF_Float32NoW, FQuatFloat32NoW, A->KeyQuat)
-			case ACF_Identity:
-				A->KeyQuat.Add(nullQuat);
-				break;
-			default:
-				appError("Unknown rotation compression method: %d (%s)", RotationCompressionFormat, EnumToName(RotationCompressionFormat));
+				// align to 4 bytes
+				Reader.Seek(Align(Reader.Tell(), 4));
+				ReadTimeArray(Reader, RotKeys, A->KeyQuatTime, Seq->NumFrames);
 			}
-		}
-
-		if (HasTimeTracks)
-		{
-			// align to 4 bytes
-			Reader.Seek(Align(Reader.Tell(), 4));
-			ReadTimeArray(Reader, RotKeys, A->KeyQuatTime, Seq->NumFrames);
-		}
-
+	}
 #if DEBUG_DECOMPRESS
 //		appPrintf("[%s : %s] Frames=%d KeyPos.Num=%d KeyQuat.Num=%d KeyFmt=%s\n", *Seq->SequenceName, *TrackBoneNames[j],
 //			Seq->NumFrames, A->KeyPos.Num(), A->KeyQuat.Num(), *Seq->KeyEncodingFormat);
@@ -1452,7 +1523,7 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 	// either as TArray or as bulk, and then array is separated onto multiple "views" for
 	// FUECompressedAnimData. We'll use a different name for "joined" serialized array here to
 	// avoid confuse.
-	TArray<byte> SerializedByteStream;
+	// TArray<byte> SerializedByteStream;
 
 	if (bUseBulkDataForLoad)
 	{
@@ -1468,7 +1539,7 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 		}
 	}
 
-	FString BoneCodecDDCHandle, CurveCodecPath;
+	FString /*BoneCodecDDCHandle,*/ CurveCodecPath;
 	Ar << BoneCodecDDCHandle << CurveCodecPath;
 #if DEBUG_ANIM
 	appPrintf("BoneCodec (%s) CurveCodec (%s)\n", *BoneCodecDDCHandle, *CurveCodecPath);
@@ -1490,6 +1561,11 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 		Ar << CompressedNumFrames;
 		// todo: editor-only data here
 
+		if (BoneCodecDDCHandle.EndsWith("ACL_0"))
+		{
+			NumFrames = CompressedNumFrames;
+			return;
+		}
 		// FUECompressedAnimData::SerializeCompressedData
 		Ar << (byte&)KeyEncodingFormat;
 		Ar << (byte&)TranslationCompressionFormat;
@@ -1664,6 +1740,7 @@ void UAnimSequence4::PostLoad()
 	RawAnimationData.Empty();
 	CompressedByteStream.Empty();
 	CompressedTrackOffsets.Empty();
+	SerializedByteStream.Empty();
 
 	unguard;
 }

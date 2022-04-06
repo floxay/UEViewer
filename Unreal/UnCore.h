@@ -2158,6 +2158,31 @@ inline void CopyArray(TArray<T1> &Dst, const TArray<T2> &Src)
 	}
 }
 
+template<typename T1, typename T2>
+inline void CopyArray(TArray<T1> &Dst, const TArray<T2> &Src, int32 Count, int32 FromIndex)
+{
+	if (TAreTypesEqual<T1,T2>::Value && TTypeInfo<T1>::IsPod)
+	{
+		// fast version when copying POD type array
+		TArray<T2> TempSrc;
+		CopyArrayView(TempSrc, Src.GetData()+FromIndex, Count);
+		Dst.RawCopy(TempSrc, sizeof(T1));
+		return;
+	}
+
+	// copying 2 different types, or non-POD type
+	Dst.Empty(Count);
+	if (Count)
+	{
+		Dst.AddUninitialized(Count);
+		T1 *pDst = (T1*)Dst.GetData();
+		T2 *pSrc = (T2*)(Src.GetData() + FromIndex);
+		do		// Count is > 0 here - checked above, so "do ... while" is more suitable (and more compact)
+		{
+			*pDst++ = *pSrc++;
+		} while (--Count);
+	}
+}
 
 /*-----------------------------------------------------------------------------
 	TMap template
