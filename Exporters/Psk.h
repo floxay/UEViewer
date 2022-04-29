@@ -241,4 +241,16 @@ struct VQuatAnimKey
 };
 
 
+struct VScaleAnimKey
+{
+	FVector			Scale;				// If uniform scaling is required, just use the X component
+	float			Time;				// disregarded
+
+	friend FArchive& operator<<(FArchive &Ar, VScaleAnimKey&K)
+	{
+		return Ar << K.Scale << K.Time;
+	}
+};
+
+
 #endif // __PSK_H__

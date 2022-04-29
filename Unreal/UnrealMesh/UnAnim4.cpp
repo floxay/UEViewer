@@ -1286,7 +1286,6 @@ void UAnimSequence4::Serialize(FArchive& Ar)
 				SerializeCompressedData3(Ar);
 
 			Ar << bUseRawDataOnly;
-			DROP_REMAINING_DATA(Ar); // temporary ACL crash fix
 		}
 	}
 
@@ -1544,12 +1543,6 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 #if DEBUG_ANIM
 	appPrintf("BoneCodec (%s) CurveCodec (%s)\n", *BoneCodecDDCHandle, *CurveCodecPath);
 #endif
-
-	if (BoneCodecDDCHandle.EndsWith("ACL_0"))	// temporary ACL crash fix
-	{
-		appNotify("Animation Codec: %s is not implemented", *BoneCodecDDCHandle);
-		return;
-	}
 
 	TArray<byte> CompressedCurveByteStream;
 	Ar << CompressedCurveByteStream;

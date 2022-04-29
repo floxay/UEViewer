@@ -698,9 +698,55 @@ static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim)
 	// importer will always read "SCALEKEYS" chunk.
 	if (PSA_VERSION >= 20090127)
 	{
-		ScaleKeysHdr.DataCount = 0;
-		ScaleKeysHdr.DataSize  = 16; // sizeof(VScaleAnimKey) = FVector + float
+		guard(ScaleKeys);
+		int keysCount = 0;
+#if SUPPORT_SCALE_KEYS
+		keysCount = framesCount * numBones;
+#endif
+		ScaleKeysHdr.DataCount = keysCount;
+		ScaleKeysHdr.DataSize = sizeof(VScaleAnimKey);
 		SAVE_CHUNK(ScaleKeysHdr, "SCALEKEYS");
+#if SUPPORT_SCALE_KEYS
+		for (i = 0; i < numAnims; i++)
+		{
+			guard(Sequence);
+			const CAnimSequence& S = *Anim->Sequences[i];
+			for (int t = 0; t < S.NumFrames; t++)
+			{
+				for (int b = 0; b < numBones; b++)
+				{
+					VScaleAnimKey K;
+					CVec3 SC;
+
+					SC.Set(1, 1, 1);
+
+					if (t < S.Tracks[b]->KeyScale.Num())
+						SC = S.Tracks[b]->KeyScale[t]; // not sure if it needs to be interpolated sooo...
+
+					K.Scale = (FVector&) SC;
+					K.Time = 1;
+
+					if (sizeof(VScaleAnimKey) == sizeof(float) * 4)
+					{
+						// Packed structure, serialize with a single call
+						Ar.Serialize(&K, sizeof(K));
+					}
+					else
+					{
+						Ar << K;
+					}
+					keysCount--;
+
+					// check for user error
+					if (S.Tracks[b]->KeyScale.Num() == 0)
+						requireConfig = true; // TODO: flag for scale
+				}
+			}
+			unguard;
+		}
+		assert(keysCount == 0);
+#endif
+		unguard;
 	}
 
 	// psa file is done
@@ -776,7 +822,7 @@ static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim)
 					if (S.Tracks[b]->KeyQuat.Num() == 0)
 						flag |= FLAG_NO_ROTATION;
 					if (flag)
-						Ar1->Printf("%s.%d=%s\n", *S.Name, b, FlagInfo[flag]);
+						Ar1->Printf("%s.%d=%s\n", *S.Name, b, FlagInfo[flag]); // TODO: Add flag for scale
 				}
 			}
 		}

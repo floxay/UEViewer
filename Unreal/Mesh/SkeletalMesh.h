@@ -31,7 +31,7 @@ TODO:
 
 #define MAX_MESHBONES				(1024*3)		// NGD had a mesh with ~2100 bones! (basepose_0000.uasset)
 #define NUM_INFLUENCES				4
-//#define SUPPORT_SCALE_KEYS			1
+#define SUPPORT_SCALE_KEYS			1
 //#define ANIM_DEBUG_INFO				1
 
 struct CSkelMeshVertex : public CMeshVertex
