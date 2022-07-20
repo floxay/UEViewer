@@ -36,6 +36,48 @@ struct FPackedNormal
 		return r;
 	}
 
+	FPackedNormal &operator=(const uint16 &InData)
+	{
+		auto x = (byte)(InData & 0xFF);
+		auto y = (byte)((InData >> 8) & 0xFF);
+
+		//ugly af, copied the vertex shader glsl code, didnt bother with W component
+		FVector2D v27; // = v30;
+		v27.X = x;
+		v27.Y = y;
+		if (((int)(v27.X + 0.5)) > 127 && ((int)(v27.Y + 0.5)) > 127)
+		{
+			v27.X = (v27.X + -128.0f) / 127.0f;
+			v27.Y = (v27.Y + -128.0f) / 127.0f;
+		}
+		else
+		{
+			v27.X /= 127.0f;
+			v27.Y /= 127.0f;
+		}
+		FVector2D v31;
+		v31.X = (v27.X * 2) + -1.0f;
+		v31.Y = (v27.Y * 2) + -1.0f;
+		FVector v32;
+		v32.Set(v31.X, v31.Y, 1 + -(1 * fabs(v31.X) + 1 * fabs(v31.Y)));
+		FVector v28 = v32;
+		if (v32.Z < 0.0f)
+		{
+			FVector2D v33;
+			v33.X = fabs(v32.Y);
+			v33.Y = fabs(v32.X);
+			FVector2D v34;
+			v34.X = v32.X > 0.0f ? 1.0f : -1.0f;
+			v34.Y = v32.Y > 0.0f ? 1.0f : -1.0f;
+			v28.X = (1.0f + -v33.X) * v34.X;
+			v28.Y = (1.0f + -v33.Y) * v34.Y;
+		}
+		CVec3 v35 = (CVec3&)v28;
+		v35.Normalize();
+		v28 = (FVector&)v35;
+		return *this = v28;
+	}
+
 	FPackedNormal &operator=(const FVector &V)
 	{
 		Data = int((V.X + 1) * 127.5f)
@@ -403,6 +445,28 @@ struct FVectorHalf
 };
 
 SIMPLE_TYPE(FVectorHalf, uint16);
+
+
+struct FVectorShort
+{
+	int16			X, Y, Z;
+
+	operator FVector() const
+	{
+		FVector r;
+		r.X = X / 32767.0f;
+		r.Y = Y / 32767.0f;
+		r.Z = Z / 32767.0f;
+		return r;
+	}
+
+	friend FArchive& operator<<(FArchive& Ar, FVectorShort& V)
+	{
+		return Ar << V.X << V.Y << V.Z;
+	}
+};
+
+SIMPLE_TYPE(FVectorShort, int16)
 
 
 #if BATMAN

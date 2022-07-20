@@ -128,7 +128,16 @@ struct FPositionVertexBuffer4
 		}
 #endif // DAYSGONE
 
-		S.Verts.BulkSerialize(Ar);
+		Ar.Seek(Ar.Tell() + 8); //skipping dummy bulkserialize size and count
+		S.Verts.AddUninitialized(S.NumVertices);
+		for (uint32 i = 0; i < S.NumVertices; i++)
+		{
+			FVectorShort vert;
+			Ar << vert;
+			S.Verts[i] = (FVector) vert;
+		}
+
+		//S.Verts.BulkSerialize(Ar);
 		return Ar;
 
 		unguard;
@@ -156,7 +165,11 @@ struct FStaticMeshUVItem4
 	{
 		if (!GUseHighPrecisionTangents)
 		{
-			Ar << V.Normal[0] << V.Normal[2];	// TangentX and TangentZ
+			//Ar << V.Normal[0] << V.Normal[2];	// TangentX and TangentZ
+			uint16 Normal, Tangent;
+			Ar << Normal << Tangent;
+			V.Normal[0] = Normal;
+			V.Normal[2] = Tangent;
 		}
 		else
 		{
@@ -1852,6 +1865,15 @@ void USkeletalMesh4::Serialize(FArchive &Ar)
 		{
 			// serialize cooked data only if editor data not exists - use custom array serializer function
 			LODModels.Serialize2<FStaticLODModel4::SerializeRenderItem>(Ar);
+		}
+	}
+
+	for (uint32 i = 0; i < LODModels.Num(); i++)
+	{
+		for (uint32 j = 0; j < LODModels[i].NumVertices; j++)
+		{
+			LODModels[i].VertexBufferGPUSkin.VertsFloat[j].Pos.Scale(Bounds.BoxExtent);
+			LODModels[i].VertexBufferGPUSkin.VertsFloat[j].Pos.Add(Bounds.Origin);
 		}
 	}
 
