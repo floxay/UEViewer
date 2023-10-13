@@ -405,25 +405,26 @@ struct FVectorHalf
 SIMPLE_TYPE(FVectorHalf, uint16);
 
 
-struct FVector4Half
+struct FVector3SignedShortScale
 {
-	uint16				X, Y, Z, W;
+	int16 X, Y, Z, W;
 
-	friend FArchive& operator<<(FArchive &Ar, FVector4Half &v)
+	friend FArchive& operator<<(FArchive &Ar, FVector3SignedShortScale &v)
 	{
 		return Ar << v.X << v.Y << v.Z << v.W;
 	}
 	operator FVector() const
 	{
 		FVector r;
-		r.X = half2float(X);
-		r.Y = half2float(Y);
-		r.Z = half2float(Z);
+
+		float Wf = (W == 0) ? 1.f : float(W);
+
+		r.X = X / Wf;
+		r.Y = Y / Wf;
+		r.Z = Z / Wf;
 		return r;
 	}
 };
-
-SIMPLE_TYPE(FVector4Half, uint16);
 
 
 #if BATMAN

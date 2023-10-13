@@ -136,12 +136,14 @@ struct FPositionVertexBuffer4
 			Ar << bUseFullPrecisionPositions << Bounds;
 			if (!bUseFullPrecisionPositions)
 			{
-				TArray<FVector4Half> PackedVerts;
+				TArray<FVector3SignedShortScale> PackedVerts;
 				PackedVerts.BulkSerialize(Ar);
 				S.Verts.AddUninitialized(PackedVerts.Num());
 				for (int i = 0; i < PackedVerts.Num(); i++)
 				{
 					S.Verts[i] = PackedVerts[i];
+					S.Verts[i].Scale(Bounds.BoxExtent);
+					S.Verts[i].Add(Bounds.Origin);
 				}
 				return Ar;
 			}
